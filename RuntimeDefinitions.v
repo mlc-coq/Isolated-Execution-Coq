@@ -5,6 +5,9 @@ From Coq Require Import Structures.OrderedTypeEx.
 From Coq Require Import Init.Nat.
 From Coq Require Import Bool.Bool.
 From Coq Require Import Logic.Eqdep_dec.
+From Coq Require Import Lia.
+From Coq Require Import Arith.PeanoNat.
+From Coq Require Import Arith.Arith.
 
 Module Import NatMap := FMapList.Make(Nat_as_OT).
 Module OrderedPair := PairOrderedType Nat_as_OT Nat_as_OT.
@@ -13,6 +16,9 @@ Module Import CacheletMap := PairMap.
 Module NatMapProperties := WProperties_fun Nat_as_OT NatMap.
 Module PairMapProperties := WProperties_fun OrderedPair PairMap.
 Module CacheletMapProperties := PairMapProperties.
+
+Module NatMapFacts := NatMapProperties.F.
+Module CacheletMapFacts := CacheletMapProperties.F.
 
 
 (* Identifiers and Atomic Values *)
@@ -60,7 +66,6 @@ Inductive enclave_state : Type :=
 
 
 (* CC-Related Structures *)
-Definition way_mask := list way_ID.
 Inductive validity_bit : Type :=
 | valid_bit : validity_bit
 | dirty_bit : validity_bit.
@@ -70,7 +75,7 @@ Inductive nullable_cachelet_index : Type :=
 | cachelet_index_none : nullable_cachelet_index.
 
 Definition data_block := NatMap.t memory_value.
-Definition remapping_list := NatMap.t way_mask.
+Definition remapping_list := list cachelet_index.
 (* Extra structure to hold data in way_set_cache *)
 Inductive way_set_cache_value : Type :=
 | valid_bit_tag_and_data : validity_bit -> cache_tag_value -> data_block -> way_set_cache_value.
@@ -131,16 +136,153 @@ Definition eq_cachelet_index (c1: cachelet_index) (c2: cachelet_index): bool :=
   end.
 
 (* Remove From CAT *)
-Fixpoint recursive_remove_from_CAT (c: cachelet_index) (F: CAT): CAT :=
-  match F with
-  | nil => nil
-  | c' :: F' =>
-    match eq_cachelet_index c c' with
-    | true => F'
-    | false => c' :: recursive_remove_from_CAT c F'
+Lemma cmp_to_eq : forall x y, (x =? y) = true -> x = y.
+Proof.
+  intro x.
+  induction x.
+  intros y H.
+  destruct y. reflexivity. simpl in *. congruence.
+  intros y H. destruct y.
+  simpl in *. congruence. f_equal ; auto.
+Qed.
+Lemma cmp_uneq_helper1 : forall n m : nat,
+    n <> m -> S n <> S m.
+Proof.
+  unfold not; intros.
+  apply H. injection H0. intro. assumption.
+Qed.
+Lemma cmp_uneq_helper2 : forall n m : nat,
+    S n <> S m -> n <> m.
+Proof.
+  unfold not; intros.
+  apply H. lia.
+Qed.
+Lemma cmp_to_uneq : forall x y, (x =? y) = false <-> x <> y.
+Proof.
+  induction x. split.
+  simpl. destruct y. discriminate. discriminate.
+  simpl. destruct y. intros. contradiction. intros. reflexivity.
+  simpl. destruct y.
+  split. intros. discriminate. intros. reflexivity.
+  split. intros. apply IHx in H. apply cmp_uneq_helper1. exact H.
+  intros. apply cmp_uneq_helper2 in H. apply IHx in H. exact H.
+Qed.
+
+Lemma eq_to_cmp : forall x, x = x -> (x =? x) = true.
+Proof.
+  intros x.
+  induction x.
+  simpl. reflexivity.
+  simpl. intros. apply IHx. reflexivity.
+Qed.
+
+Lemma cmp_to_eq_and : forall x y z w, (x =? y) && (z =? w) = true -> x = y /\ z = w.
+Proof.
+  intros.
+  apply andb_true_iff in H.
+  destruct H.
+  split.
+  apply cmp_to_eq; exact H.
+  apply cmp_to_eq; exact H0.
+Qed.
+
+Lemma cmp_to_uneq_and : forall x y z w, (x =? y) && (z =? w) = false -> x <> y \/ z <> w.
+Proof.
+  intros.
+  apply andb_false_iff in H.
+  destruct H.
+  left. apply cmp_to_uneq in H. exact H.
+  right. apply cmp_to_uneq in H. exact H.
+Qed.
+
+
+Lemma pair_equality : forall (x y z w : nat), (x, y) = (z, w) <-> x = z /\ y = w.
+Proof.
+  split; intros.
+  injection H; intros; subst.
+  split; reflexivity.
+  destruct H; subst; reflexivity.
+Qed.
+Lemma pair_inequality : forall (x y z w: nat), (x, y) <> (z, w) <-> x <> z \/ y <> w.
+Proof.
+  intros x y z w. split.
+  intros H. destruct (Nat.eq_dec x z) as [H1 | H1]; destruct (Nat.eq_dec y w) as [H2 | H2].
+  exfalso. apply H. rewrite H1, H2. reflexivity.
+  right; exact H2.
+  left; exact H1.
+  left; exact H1.
+  intros [H1 | H1] H.
+  injection H; intros; subst.
+  apply H1; reflexivity.
+  injection H; intros; subst.
+  apply H1; reflexivity.
+Qed.
+Lemma eq_dec_pair : forall (x y z w : nat), { (x, y) = (z, w) } + { (x, y) <> (z, w) }.
+Proof.
+  intros.
+  assert ((x, y) <> (z, w) <-> x <> z \/ y <> w). apply pair_inequality.
+  case_eq (Nat.eqb x z); case_eq (Nat.eqb y w); intros.
+  apply cmp_to_eq in H0, H1; subst.
+  left; reflexivity.
+  apply cmp_to_uneq in H0.
+  right. apply H. right; exact H0.
+  apply cmp_to_uneq in H1.
+  right. apply H. left; exact H1.
+  apply cmp_to_uneq in H1.
+  right. apply H. left; exact H1.
+Qed.
+
+Lemma eq_dec_cachelet : forall (n m : cachelet_index), {n = m} + {n <> m}.
+Proof.
+  intros.
+  destruct n; destruct m.
+  apply eq_dec_pair.
+Qed.
+
+Fixpoint in_bool (c: cachelet_index) (l: list cachelet_index) : bool :=
+  match l with
+  | nil => false
+  | x :: l' =>
+    match (eq_cachelet_index x c) with
+    | true => true
+    | false => in_bool c l'
     end
   end.
-Definition remove_CAT (c: cachelet_index) (F: CAT): CAT := recursive_remove_from_CAT c F.
+
+Lemma in_bool_iff : forall c l,
+  (in_bool c l = true) <-> List.In c l.
+Proof.
+  split; intros.
+  {
+    induction l. unfold in_bool in H; discriminate.
+    unfold List.In. unfold in_bool in H.
+    case_eq (eq_cachelet_index a c); intros.
+    assert (A0 := H0). destruct (eq_cachelet_index a c) in H, A0.
+    destruct a; destruct c; unfold eq_cachelet_index in H0.
+    apply cmp_to_eq_and in H0; destruct H0; subst w0 s0.
+    left; reflexivity. discriminate.
+    assert (A0 := H0). destruct (eq_cachelet_index a c) in H, A0.
+    discriminate.
+    apply IHl in H. right; exact H.
+  }
+  {
+    induction l. unfold List.In in H; destruct H.
+    unfold in_bool. unfold List.In in H. destruct H. subst.
+    case_eq (eq_cachelet_index c c); intros. reflexivity.
+    unfold eq_cachelet_index; destruct c; apply cmp_to_uneq_and in H.
+    destruct H.
+    assert (w = w). reflexivity. apply H in H0. destruct H0.
+    assert (s = s). reflexivity. apply H in H0. destruct H0.
+    case_eq (eq_cachelet_index a c); intros. reflexivity.
+    apply IHl. exact H.
+  }
+Qed.
+
+Definition remove_CAT (c: cachelet_index) (F: CAT): option CAT :=
+  match (in_bool c F) with
+  | true => Some (List.remove eq_dec_cachelet c F)
+  | false => None
+  end.
 
 (* Register List to Values *)
 Fixpoint recursive_read_register_list (rho: registers) (r_bar: (list register_ID)): (list nat) :=

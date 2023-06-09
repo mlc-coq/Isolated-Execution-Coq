@@ -1,334 +1,209 @@
 From Coq Require Import Lists.List.
 From Coq Require Import Init.Nat.
+From Coq Require Import Program.Wf.
 Require Import AppendixC.
 Require Import RuntimeDefinitions.
 
 (* Appendix A, Appendix B, Fig 6, and Fig 7 *)
 
-(* Placeholder Cache Hierarchy Tree *)
-Inductive cache_hierarchy_tree : Type :=
-| ch_tree: physical_cache_unit_ID -> (list cache_hierarchy_tree) -> cache_hierarchy_tree
-| ch_leaf: core_ID -> cache_hierarchy_tree.
-Inductive cache_hierarchy_value : Type :=
-| cache_node: physical_cache_unit_ID -> cache_hierarchy_value
-| core_node: core_ID -> cache_hierarchy_value.
-Inductive cache_unit_ID_parent : Type :=
-| cache_parent: physical_cache_unit_ID -> cache_unit_ID_parent
-| cache_root: cache_unit_ID_parent.
+(* Cache Hierarchy Tree *)
+(* Mapping between root, cache, or core -> path to root *)
+Inductive cache_tree_node : Type :=
+| root_node : cache_tree_node
+| core_node : core_ID -> cache_tree_node
+| cache_node : physical_cache_unit_ID -> cache_tree_node.
+Definition cache_hierarchy_tree : Type := list (cache_tree_node * (list physical_cache_unit_ID)).
 
-(* Check if val is in heirarchy tree/subtree *)
-Fixpoint tree_contains_core_ID (height: nat) (val: core_ID) (heir_tree: cache_hierarchy_tree): bool :=
-  match height with
-  | 0 => false
-  | S n =>
-    match heir_tree with
-    | ch_tree _ l => fold_left orb (map (tree_contains_core_ID n val) l) false
-    | ch_leaf c => eqb val c
-    end
-  end.
-Fixpoint tree_contains_cache_ID (height: nat) (val: physical_cache_unit_ID) (heir_tree: cache_hierarchy_tree): bool :=
-  match height with
-  | 0 => false
-  | S n =>
-    match heir_tree with
-    | ch_tree p l => fold_left orb (map (tree_contains_cache_ID n val) l) (eqb p val)
-    | ch_leaf _ => false
-    end
-  end.
-
-(* Return subtree with val *)
-Fixpoint get_child_with_core_ID (height: nat) (val: core_ID) (l: (list cache_hierarchy_tree)): option cache_hierarchy_tree :=
-  match l with
+Fixpoint recursive_get_cache_list_root (c: cache_tree_node) (h_tree: cache_hierarchy_tree): option (list physical_cache_unit_ID) :=
+  match h_tree with
   | nil => None
-  | hier_subtree :: l' =>
-    match (tree_contains_core_ID height val hier_subtree) with
-    | true => Some hier_subtree
-    | false => get_child_with_core_ID height val l'
+  | (node, l) :: h_tree' =>
+    match node with
+    | root_node => Some l
+    | _ => recursive_get_cache_list_root c h_tree'
     end
   end.
-Fixpoint get_child_with_cache_ID (height: nat) (val: physical_cache_unit_ID) (l: (list cache_hierarchy_tree)): option cache_hierarchy_tree :=
-  match l with
+Fixpoint recursive_get_cache_list_cache (c: cache_tree_node) (h_tree: cache_hierarchy_tree): option (list physical_cache_unit_ID) :=
+  match h_tree with
   | nil => None
-  | hier_subtree :: l' =>
-    match (tree_contains_cache_ID height val hier_subtree) with
-    | true => Some hier_subtree
-    | false => get_child_with_cache_ID height val l'
-    end
-  end.
-
-(* Get tree height (in number of nodes, which is typical height + 1) *)
-Fixpoint get_hierarchy_tree_height (hierarchy_tree: cache_hierarchy_tree): nat :=
-  match hierarchy_tree with
-  | ch_leaf _ => S 0
-  | ch_tree _ l =>
-    match l with
-    | nil => 0
-    | hier_subtree :: _ => S (get_hierarchy_tree_height hier_subtree)
-    end
-  end.
-
-(* Get parent in cache tree *)
-Fixpoint get_cache_parent_core_ID (parent: cache_unit_ID_parent) (height: nat) (val: core_ID) (hierarchy_tree: cache_hierarchy_tree): option cache_unit_ID_parent :=
-  match height with
-  | 0 => None
-  | S n =>
-    match hierarchy_tree with
-    | ch_leaf c =>
-      match (eqb c val) with
-      | true => Some parent
-      | false => None
-      end
-    | ch_tree p l =>
-      match (get_child_with_core_ID height val l) with
-      | None => None
-      | Some hier_subtree => get_cache_parent_core_ID (cache_parent p) n val hier_subtree
-      end
-    end
-  end.
-Fixpoint get_cache_parent_cache_ID (parent: cache_unit_ID_parent) (height: nat) (val: physical_cache_unit_ID) (hierarchy_tree: cache_hierarchy_tree): option cache_unit_ID_parent :=
-  match height with
-  | 0 => None
-  | S n =>
-    match hierarchy_tree with
-    | ch_leaf _ => None
-    | ch_tree p l =>
-      match (eqb p val) with
-      | true => Some parent
-      | false =>
-        match (get_child_with_core_ID height val l) with
-        | None => None
-        | Some hier_subtree => get_cache_parent_cache_ID (cache_parent p) n val hier_subtree
+  | (node, l) :: h_tree' =>
+    match node with
+    | cache_node m =>
+      match c with
+      | cache_node v =>
+        match (eqb v m) with
+        | true => Some l
+        | false => recursive_get_cache_list_cache c h_tree'
         end
+      | _ => None
       end
+    | _ => recursive_get_cache_list_cache c h_tree'
     end
   end.
-Definition get_cache_hierarchy_parent (val: cache_hierarchy_value) (hierarchy_tree: cache_hierarchy_tree): option cache_unit_ID_parent :=
-  match val with
-  | cache_node x =>
-    match (tree_contains_cache_ID (get_hierarchy_tree_height hierarchy_tree) x hierarchy_tree) with
-    | true => get_cache_parent_cache_ID cache_root (get_hierarchy_tree_height hierarchy_tree) x hierarchy_tree
-    | false => None
+Fixpoint recursive_get_cache_list_core (c: cache_tree_node) (h_tree: cache_hierarchy_tree): option (list physical_cache_unit_ID) :=
+  match h_tree with
+  | nil => None
+  | (node, l) :: h_tree' =>
+    match node with
+    | core_node m =>
+      match c with
+      | core_node v =>
+        match (eqb v m) with
+        | true => Some l
+        | false => recursive_get_cache_list_core c h_tree'
+        end
+      | _ => None
+      end
+    | _ => recursive_get_cache_list_core c h_tree'
     end
-  | core_node x =>
-    match (tree_contains_core_ID (get_hierarchy_tree_height hierarchy_tree) x hierarchy_tree) with
-    | true => get_cache_parent_core_ID cache_root (get_hierarchy_tree_height hierarchy_tree) x hierarchy_tree
-    | false => None
-    end
+  end.
+Definition get_cache_ID_path (c: cache_tree_node) (h_tree: cache_hierarchy_tree): option (list physical_cache_unit_ID) :=
+  match c with
+  | root_node => recursive_get_cache_list_root c h_tree
+  | core_node _ => None
+  | cache_node _ => recursive_get_cache_list_cache c h_tree
   end.
 
-(* Well Formed Cache Hierarchy Tree *)
-Fixpoint recursive_uniform_depth (height: nat) (h_tree: cache_hierarchy_tree): bool :=
-  match height with
-  | 0 => false
-  | S 0 =>
-    match h_tree with
-    | ch_tree _ l => false
-    | ch_leaf _ => true
-    end
-  | S n =>
-    match h_tree with
-    | ch_tree _ l =>
-      match l with
-      | nil => false
-      | l' => fold_left andb (map (recursive_uniform_depth n) l') true
-      end
-    | ch_leaf _ => false
-    end
-  end.
-Definition uniform_depth (h_tree: cache_hierarchy_tree): bool :=
-  match (get_hierarchy_tree_height h_tree) with
-  | n => recursive_uniform_depth n h_tree
-  end.
-(* Probably want to use a better definition, but will try this for now *)
-Definition well_formed_tree (h_tree: cache_hierarchy_tree): Prop := (uniform_depth h_tree = true).
-
+(* Well-Defined H-Tree *)
+Definition well_defined_cache_tree (h_tree : cache_hierarchy_tree): Prop :=
+  get_cache_ID_path root_node h_tree = Some nil /\
+  (forall c a l, get_cache_ID_path (cache_node c) h_tree = Some (a :: l) -> a :: l = c :: l) /\
+  (forall q a l, get_cache_ID_path (core_node q) h_tree = Some (a :: l) ->
+    get_cache_ID_path (cache_node a) h_tree = Some (a :: l)) /\
+  (forall c a l, get_cache_ID_path (cache_node c) h_tree = Some (c :: a :: l) ->
+    get_cache_ID_path (cache_node a) h_tree = Some (a :: l)).
 
 (* MLC Deallocation *)
-Fixpoint recursive_mlc_deallocation (e: raw_enclave_ID) (k: multi_level_cache) (lambda: physical_cache_unit_ID) (h_tree: cache_hierarchy_tree) (max_calls: nat): option multi_level_cache :=
-  match max_calls with
-  | 0 => None
-  | S n =>
+Fixpoint recursive_mlc_deallocation (e: raw_enclave_ID) (k: multi_level_cache) (L: list physical_cache_unit_ID) {struct L}: option multi_level_cache :=
+  match L with
+  | nil => Some k
+  | lambda :: L' =>
     match (NatMap.find lambda k) with
     | None => None
     | Some old_psi =>
       match cachelet_deallocation e old_psi with
       | None => None
-      | Some psi =>
-        match (get_cache_hierarchy_parent (cache_node lambda) h_tree) with
-        | None => None
-        | Some H =>
-          match H with
-          | cache_root => None
-          | cache_parent x =>
-            match (recursive_mlc_deallocation e (NatMap.add lambda psi k) x h_tree n) with
-            | None => None
-            | Some k'' => Some k''
-            end
-          end
-        end
+      | Some psi => recursive_mlc_deallocation e (NatMap.add lambda psi k) L'
       end
     end
   end.
-Definition mlc_deallocation (state: enclave_state) (k: multi_level_cache) (lambda: physical_cache_unit_ID) (h_tree: cache_hierarchy_tree): option multi_level_cache :=
-  match state with
-  | enclave_state_value e_id _ =>
-    match e_id with
-    | enclave_ID_inactive => None
-    | enclave_ID_active e => recursive_mlc_deallocation e k lambda h_tree (get_hierarchy_tree_height h_tree)
+Definition mlc_deallocation (e: raw_enclave_ID) (k: multi_level_cache) (lambda: cache_tree_node) (h_tree: cache_hierarchy_tree): option multi_level_cache :=
+  match (get_cache_ID_path lambda h_tree) with
+  | Some L =>
+    match L with
+    | nil => None
+    | _ => recursive_mlc_deallocation e k L
     end
+  | None => None
   end.
 
 (* MLC Write *)
 Inductive mlc_write_value : Type :=
 | mlc_write_valid: data_block -> observation_trace -> memory -> multi_level_cache -> mlc_write_value
 | mlc_write_error: mlc_write_value.
-Fixpoint recursive_mlc_write (k: multi_level_cache) (lambda: cache_unit_ID_parent) (state: enclave_state) (mu: memory) (l: memory_address) (v: memory_value) (h_tree: cache_hierarchy_tree) (max_calls: nat): mlc_write_value :=
-  match max_calls with
-  | 0 => mlc_write_error
-  | S n =>
-    match lambda with
-    | cache_root =>
-      match l with
-      | address b delta =>
-        match (NatMap.find b mu) with
-        | None => mlc_write_error
-        | Some D' =>
-          match v with
-          | memory_value_instruction _ => mlc_write_error
-          | memory_value_data d => mlc_write_valid (NatMap.add delta (memory_value_data d) D') nil (NatMap.add b (NatMap.add delta (memory_value_data d) D') mu) k
-          end
+Fixpoint recursive_mlc_write (k: multi_level_cache) (state: enclave_state) (mu: memory) (l: memory_address) (v: memory_value) (L: list physical_cache_unit_ID) {struct L}: mlc_write_value :=
+  match L with
+  | nil =>
+    match l with
+    | address b delta =>
+      match (NatMap.find b mu) with
+      | None => mlc_write_error
+      | Some D' =>
+        match v with
+        | memory_value_instruction _ => mlc_write_error
+        | memory_value_data d => mlc_write_valid (NatMap.add delta (memory_value_data d) D') nil (NatMap.add b (NatMap.add delta (memory_value_data d) D') mu) k
         end
       end
-    | cache_parent lambda_value =>
-      match (NatMap.find lambda_value k) with
-      | None => mlc_write_error
-      | Some original_psi =>
-        match (cc_hit_write original_psi state l v) with
-        | cc_hit_write_valid D c psi =>
-          match l with
-          | address b delta => mlc_write_valid D ((observation_tuple hit_write c lambda_value) :: nil) mu (NatMap.add lambda_value psi k)
-          end
-        | cc_hit_write_error =>
-          match (get_cache_hierarchy_parent (cache_node lambda_value) h_tree) with
-          | None => mlc_write_error
-          | Some H =>
-            match (recursive_mlc_write k H state mu l v h_tree n) with
-            | mlc_write_error => mlc_write_error
-            | mlc_write_valid D Obs mu' k' =>
-              match (cc_update original_psi state D l) with
-              | cc_update_error => mlc_write_error
-              | cc_update_valid c psi' => mlc_write_valid D (Obs ++ ((observation_tuple miss c lambda_value) :: nil)) mu' (NatMap.add lambda_value psi' k')
-              end
-            end
+    end
+  | lambda :: L' =>
+    match (NatMap.find lambda k) with
+    | None => mlc_write_error
+    | Some original_psi =>
+      match (cc_hit_write original_psi state l v) with
+      | cc_hit_write_valid D c psi =>
+        match l with
+        | address b delta => mlc_write_valid D ((observation_tuple hit_write c lambda) :: nil) mu (NatMap.add lambda psi k)
+        end
+      | cc_hit_write_error =>
+        match (recursive_mlc_write k state mu l v L') with
+        | mlc_write_error => mlc_write_error
+        | mlc_write_valid D Obs mu' k' =>
+          match (cc_update original_psi state D l) with
+          | cc_update_error => mlc_write_error
+          | cc_update_valid c psi' => mlc_write_valid D (Obs ++ ((observation_tuple miss c lambda) :: nil)) mu' (NatMap.add lambda psi' k')
           end
         end
       end
     end
   end.
-Definition mlc_write (k: multi_level_cache) (lambda: cache_unit_ID_parent) (state: enclave_state) (mu: memory) (l: memory_address) (v: memory_value) (h_tree: cache_hierarchy_tree): mlc_write_value :=
-  recursive_mlc_write k lambda state mu l v h_tree (get_hierarchy_tree_height h_tree).
+Definition mlc_write (k: multi_level_cache) (state: enclave_state) (mu: memory) (l: memory_address) (v: memory_value) (lambda: cache_tree_node) (h_tree: cache_hierarchy_tree): mlc_write_value :=
+  match (get_cache_ID_path lambda h_tree) with
+  | Some L => recursive_mlc_write k state mu l v L
+  | None => mlc_write_error
+  end.
 
 (* MLC Allocation *)
-Fixpoint recursive_mlc_allocation (n: (list nat)) (e: raw_enclave_ID) (k: multi_level_cache) (lambda: physical_cache_unit_ID) (h_tree: cache_hierarchy_tree): option multi_level_cache :=
-  match n with
+Fixpoint recursive_mlc_allocation (n: (list nat)) (e: raw_enclave_ID) (k: multi_level_cache) (L: list physical_cache_unit_ID) {struct L}: option multi_level_cache :=
+  match L with
   | nil => Some k
-  | n_val :: n' =>
-    match (NatMap.find lambda k) with
-    | None => None
-    | Some current_psi =>
-      match (cachelet_allocation n_val e current_psi) with
-      | None => None
-      | Some psi =>
-        match (get_cache_hierarchy_parent (cache_node lambda) h_tree) with
-        | None => None
-        | Some H =>
-          match H with
-          | cache_root => None
-          | cache_parent x => recursive_mlc_allocation n' e (NatMap.add lambda psi k) x h_tree
-          end
-        end
-      end
-    end
-  end.
-Definition rec_alloc_optional_add (lambda : physical_cache_unit_ID) (psi : single_level_cache_unit) (k : option multi_level_cache) : option multi_level_cache :=
-  match k with
-  | None => None
-  | Some k' => Some (NatMap.add lambda psi k')
-  end.
-Fixpoint rmlca (n: (list nat)) (e: raw_enclave_ID) (k_opt: option multi_level_cache) (lambda: physical_cache_unit_ID) (h_tree: cache_hierarchy_tree): option multi_level_cache :=
-  match n with
-  | nil => k_opt
-  | n_val :: n' =>
-    match k_opt with
-    | None => None
-    | Some k =>
+  | lambda :: L' =>
+    match n with
+    | nil => None
+    | n_val :: n' =>
       match (NatMap.find lambda k) with
       | None => None
       | Some current_psi =>
         match (cachelet_allocation n_val e current_psi) with
         | None => None
-        | Some psi =>
-          match (get_cache_hierarchy_parent (cache_node lambda) h_tree) with
-          | None => None
-          | Some H =>
-            match H with
-            | cache_root => None
-            | cache_parent x => rec_alloc_optional_add lambda psi (rmlca n' e (Some k) x h_tree)
-            end
-          end
+        | Some psi => recursive_mlc_allocation n' e (NatMap.add lambda psi k) L'
         end
       end
     end
   end.
-Definition mlc_allocation (n: (list nat)) (state: enclave_state) (k: multi_level_cache) (lambda: physical_cache_unit_ID) (h_tree: cache_hierarchy_tree): option multi_level_cache :=
-  match state with
-  | enclave_state_value e_id _ =>
-    match e_id with
-    | enclave_ID_inactive => None
-    | enclave_ID_active e => (* rmlca n e (Some k) lambda h_tree *) recursive_mlc_allocation n e k lambda h_tree
+Definition mlc_allocation (n: (list nat)) (e: raw_enclave_ID) (k: multi_level_cache) (lambda: cache_tree_node) (h_tree: cache_hierarchy_tree): option multi_level_cache :=
+  match (get_cache_ID_path lambda h_tree) with
+  | Some L =>
+    match L with
+    | nil => None
+    | _ => recursive_mlc_allocation n e k L
     end
+  | None => None
   end.
 
 (* MLC Read *)
 Inductive mlc_read_value : Type :=
 | mlc_read_valid: data_block -> data_offset -> observation_trace -> multi_level_cache -> mlc_read_value
 | mlc_read_error: mlc_read_value.
-Fixpoint recursive_mlc_read (k: multi_level_cache) (lambda: cache_unit_ID_parent) (state: enclave_state) (mu: memory) (l: memory_address) (h_tree: cache_hierarchy_tree) (max_calls: nat): mlc_read_value :=
-  match max_calls with
-  | 0 => mlc_read_error
-  | S n =>
-    match lambda with
-    | cache_root =>
-      match l with
-      | address b delta =>
-        match (NatMap.find b mu) with
-        | None => mlc_read_error
-        | Some D => mlc_read_valid D delta nil k
-        end
-      end
-    | cache_parent lambda_value =>
-      match (NatMap.find lambda_value k) with
+Fixpoint recursive_mlc_read (k: multi_level_cache) (state: enclave_state) (mu: memory) (l: memory_address) (L: list physical_cache_unit_ID) {struct L}: mlc_read_value :=
+  match L with
+  | nil =>
+    match l with
+    | address b delta =>
+      match (NatMap.find b mu) with
       | None => mlc_read_error
-      | Some original_psi =>
-        match (cc_hit_read original_psi state l) with
-        | cc_hit_read_valid D delta c psi => mlc_read_valid D delta ((observation_tuple hit_read c lambda_value) :: nil) (NatMap.add lambda_value psi k)
-        | cc_hit_read_error =>
-          match (get_cache_hierarchy_parent (cache_node lambda_value) h_tree) with
-          | None => mlc_read_error
-          | Some H =>
-            match (recursive_mlc_read k H state mu l h_tree n) with
-            | mlc_read_error => mlc_read_error
-            | mlc_read_valid D delta Obs k' =>
-              match (cc_update original_psi state D l) with
-              | cc_update_error => mlc_read_error
-              | cc_update_valid c psi' => mlc_read_valid D delta (Obs ++ ((observation_tuple miss c lambda_value) :: nil)) (NatMap.add lambda_value psi' k')
-              end
-            end
+      | Some D => mlc_read_valid D delta nil k
+      end
+    end
+  | lambda :: L' =>
+    match (NatMap.find lambda k) with
+    | None => mlc_read_error
+    | Some original_psi =>
+      match (cc_hit_read original_psi state l) with
+      | cc_hit_read_valid D delta c psi => mlc_read_valid D delta ((observation_tuple hit_read c lambda) :: nil) (NatMap.add lambda psi k)
+      | cc_hit_read_error =>
+        match (recursive_mlc_read k state mu l L') with
+        | mlc_read_error => mlc_read_error
+        | mlc_read_valid D delta Obs k' =>
+          match (cc_update original_psi state D l) with
+          | cc_update_error => mlc_read_error
+          | cc_update_valid c psi' => mlc_read_valid D delta (Obs ++ ((observation_tuple miss c lambda) :: nil)) (NatMap.add lambda psi' k')
           end
         end
       end
     end
   end.
-Definition mlc_read (k: multi_level_cache) (lambda: cache_unit_ID_parent) (state: enclave_state) (mu: memory) (l: memory_address) (h_tree: cache_hierarchy_tree): mlc_read_value :=
-  recursive_mlc_read k lambda state mu l h_tree (get_hierarchy_tree_height h_tree).
-
+Definition mlc_read (k: multi_level_cache) (state: enclave_state) (mu: memory) (l: memory_address) (lambda: cache_tree_node) (h_tree: cache_hierarchy_tree): mlc_read_value :=
+  match (get_cache_ID_path lambda h_tree) with
+  | Some L => recursive_mlc_read k state mu l L
+  | None => mlc_read_error
+  end.

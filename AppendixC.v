@@ -18,20 +18,36 @@ Definition lt_way_ID (c1: nullable_cachelet_index) (c2: nullable_cachelet_index)
   | _, _ => c2
   end.
 
-Definition nullify_cachelet_index (c: cachelet_index): nullable_cachelet_index := cachelet_index_defined c.
-Definition nullify_cachelet_index_list (l: (list cachelet_index)): (list nullable_cachelet_index) :=
-  map (nullify_cachelet_index) l.
-
 (* Way First Allocation *)
-Definition cachelet_min_way_ID (l: (list cachelet_index)): nullable_cachelet_index :=
-  fold_right lt_way_ID cachelet_index_none (nullify_cachelet_index_list l).
-Definition way_first_allocation (F: CAT): nullable_cachelet_index := cachelet_min_way_ID F.
+Fixpoint cachelet_min_way_ID (min: nullable_cachelet_index) (l: list cachelet_index): nullable_cachelet_index :=
+  match l with
+  | nil => min
+  | a :: l' => cachelet_min_way_ID (lt_way_ID min (cachelet_index_defined a)) l'
+  end.
+Fixpoint contains_cachelet_index (c: cachelet_index) (F: CAT): bool :=
+  match F with
+  | nil => false
+  | x :: F' =>
+    match (eq_cachelet_index x c) with
+    | true => true
+    | false => contains_cachelet_index c F'
+    end
+  end.
+Definition way_first_allocation (F: CAT): nullable_cachelet_index :=
+  match (cachelet_min_way_ID cachelet_index_none F) with
+  | cachelet_index_none => cachelet_index_none
+  | (cachelet_index_defined c) =>
+    match (contains_cachelet_index c F) with
+    | true => (cachelet_index_defined c)
+    | false => cachelet_index_none
+    end
+  end.
 
 (* Cachelet Invalidation*)
-Definition cachelet_invalidation (C: way_set_cache) (ci: cachelet_index): way_set_cache :=
+Definition cachelet_invalidation (C: way_set_cache) (ci: cachelet_index): option way_set_cache :=
   match (CacheletMap.find ci C) with
-  | Some (valid_bit_tag_and_data _ c d) => CacheletMap.add ci (valid_bit_tag_and_data dirty_bit c d) C
-  | None => C
+  | Some (valid_bit_tag_and_data _ c d) => Some (CacheletMap.add ci (valid_bit_tag_and_data dirty_bit c d) C)
+  | None => None
   end.
 
 (* Beta Function *)
@@ -42,18 +58,22 @@ Definition block_to_set_and_tag (val: block_ID) (sets: set_indexed_PLRU) : set_a
 
 
 (* Find Way ID *)
-Fixpoint find_way_ID_in_mask (t: cache_tag_value) (s: set_ID) (W: way_mask) (C: way_set_cache): option way_ID :=
-  match W with
+Fixpoint find_way_ID_in_mask (t: cache_tag_value) (s: set_ID) (L: remapping_list) (C: way_set_cache): option way_ID :=
+  match L with
   | nil => None
-  | w :: W' =>
-    match (CacheletMap.find (w, s) C) with
-    | None => find_way_ID_in_mask t s W' C
-    | Some cache_value =>
-      match cache_value with
-      | valid_bit_tag_and_data vb t' D =>
-        match t =? t' with
-        | true => Some w
-        | false => find_way_ID_in_mask t s W' C
+  | (w', s') :: L' =>
+    match s =? s' with
+    | false => find_way_ID_in_mask t s L' C
+    | true =>
+      match (CacheletMap.find (w', s) C) with
+      | None => find_way_ID_in_mask t s L' C
+      | Some cache_value =>
+        match cache_value with
+        | valid_bit_tag_and_data vb t' D =>
+          match t =? t' with
+          | true => Some w'
+          | false => find_way_ID_in_mask t s L' C
+          end
         end
       end
     end
@@ -66,11 +86,7 @@ Definition find_way_ID_with_cache_tag (state: enclave_state) (s: set_ID) (t: cac
     | enclave_ID_active e =>
       match (NatMap.find e V) with
       | None => None
-      | Some L =>
-        match (NatMap.find s L) with
-        | None => None
-        | Some W => find_way_ID_in_mask t s W C
-        end
+      | Some L => find_way_ID_in_mask t s L C
       end
     end
   end.
@@ -181,43 +197,39 @@ Fixpoint recursive_cachelet_allocation (n: nat) (e: raw_enclave_ID) (F: CAT) (V:
     | cachelet_index_defined (w, s) =>
       match (NatMap.find s R) with
       | None => None
-      | Some T' => 
-        match (NatMap.find e V) with
-        | None => recursive_cachelet_allocation n' e (remove_CAT (w, s) F) (NatMap.add e (NatMap.add s (w :: nil) (NatMap.empty (list way_ID))) V) C (NatMap.add s (update T' w (enclave_ID_active e)) R)
-        | Some L =>
-          match (NatMap.find s L) with
-          | None => recursive_cachelet_allocation n' e (remove_CAT (w, s) F) (NatMap.add e (NatMap.add s (w :: nil) L) V) C (NatMap.add s (update T' w (enclave_ID_active e)) R)
-          | Some W => recursive_cachelet_allocation n' e (remove_CAT (w, s) F) (NatMap.add e (NatMap.add s (w :: W) L) V) C (NatMap.add s (update T' w (enclave_ID_active e)) R)
+      | Some T' =>
+        match (remove_CAT (w, s) F) with
+        | None => None
+        | Some remF =>
+          match (NatMap.find e V) with
+          | None => recursive_cachelet_allocation n' e remF (NatMap.add e ((w, s) :: nil) V) C (NatMap.add s (update T' w (enclave_ID_active e)) R)
+          | Some L => recursive_cachelet_allocation n' e remF (NatMap.add e ((w, s) :: L) V) C (NatMap.add s (update T' w (enclave_ID_active e)) R)
           end
         end
       end
     end
   end.
 Definition cachelet_allocation (n: nat) (e: raw_enclave_ID) (psi: single_level_cache_unit): option single_level_cache_unit := 
-  match psi with
-  | single_level_cache F V C R => recursive_cachelet_allocation n e F V C R
+  match n with
+  | 0 => None
+  | S _ =>
+    match psi with
+    | single_level_cache F V C R => recursive_cachelet_allocation n e F V C R
+    end
   end.
 
 
 (* Cachelet Deallocation *)
-Fixpoint free_cachelets (e: raw_enclave_ID) (s: set_ID) (W: way_mask) (F: CAT) (V: VPT) (C: way_set_cache) (R: set_indexed_PLRU): option single_level_cache_unit :=
-  match W with
-  | nil => Some (single_level_cache F V C R)
-  | w :: W' => 
-    match (NatMap.find s R) with
-    | None => None
-    | Some T' => (free_cachelets e s W' ((w, s) :: F) V (cachelet_invalidation C (w, s)) (NatMap.add s (update T' w (enclave_ID_active e)) R))
-    end
-  end.
-Fixpoint clear_remapping_list (e: raw_enclave_ID) (L: list (set_ID * way_mask % type)) (F: CAT) (V: VPT) (C: way_set_cache) (R: set_indexed_PLRU): option single_level_cache_unit :=
+Fixpoint clear_remapping_list (e: raw_enclave_ID) (L: remapping_list) (F: CAT) (V: VPT) (C: way_set_cache) (R: set_indexed_PLRU): option single_level_cache_unit :=
   match L with
   | nil => Some (single_level_cache F (NatMap.remove e V) C R)
-  | (s, W) :: L' =>
-    match (free_cachelets e s W F V C R) with
+  | (w, s) :: L' =>
+    match (NatMap.find s R) with
     | None => None
-    | Some psi' =>
-      match psi' with
-      | single_level_cache F' V' C' R' => clear_remapping_list e L' F' V' C' R'
+    | Some T' =>
+      match (cachelet_invalidation C (w, s)) with
+      | None => None
+      | Some C_inv => (clear_remapping_list e L' ((w, s) :: F) (NatMap.add e L' V) C_inv (NatMap.add s (update T' w (enclave_ID_active e)) R))
       end
     end
   end.
@@ -226,6 +238,6 @@ Definition cachelet_deallocation (e: raw_enclave_ID) (psi: single_level_cache_un
   | single_level_cache F V C R =>
     match (NatMap.find e V) with
     | None => None
-    | Some L => clear_remapping_list e (NatMapProperties.to_list L) F V C R
+    | Some L => clear_remapping_list e L F V C R
     end
   end.

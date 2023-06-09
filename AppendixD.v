@@ -6,11 +6,13 @@ From Coq Require Import Init.Nat.
 Definition equal_enclave_IDs (e0 : enclave_ID) (e1 : enclave_ID): bool :=
   match e0, e1 with
   | enclave_ID_active e0_val, enclave_ID_active e1_val => eqb e0_val e1_val
+  | enclave_ID_inactive, enclave_ID_inactive => true
   | _, _ => false
   end.
 Definition equal_enclave_IDs_prop (e0 : enclave_ID) (e1 : enclave_ID): Prop :=
   match e0, e1 with
   | enclave_ID_active e0_val, enclave_ID_active e1_val => eq e0_val e1_val
+  | enclave_ID_inactive, enclave_ID_inactive => True
   | _, _ => False
   end.
 

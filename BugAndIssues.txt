@@ -1,0 +1,14 @@
+- Appendix D: "where auxiliary function w ⊏ T is a predicate that holds when"
+issue: "⊏ should be ≺"
+
+- Appendix D: "If e ⊏ T and T ∈ ran(R), then e ∈ dom(V ) ∪ {⊥}"
+issue: "⊏ is not defined anywhere, I'm not certain what it should be"
+
+- Appendix C: Nullable cachelet indexes could be more clear
+
+- Section V (C: Runtime State):
+"e use μ{l} to refer to μ(b)(δ) where α(l) = ⟨b; o⟩" -> should ⟨b; o⟩ be ⟨b; δ⟩
+
+- Appendix C:
+    - second rule for cachelet deallocation has is missing a bracket
+    - extra "c" after the "F"

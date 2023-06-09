@@ -6,4 +6,6 @@
 ./AppendixC.v
 ./MLCOperations.v
 ./Semantics.v
+./WellFormedEnclaveState.v
 ./WellFormed.v
+./WellFormed2.v

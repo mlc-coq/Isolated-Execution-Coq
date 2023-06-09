@@ -85,7 +85,19 @@ Definition active_enclave_update (state: enclave_state) (id: enclave_ID): valida
   end.
 
 (* Enclave Elimination *)
-Definition enclave_elimination (state: enclave_state) (id: raw_enclave_ID): enclave_state :=
+Definition enclave_elimination (state: enclave_state) (id: raw_enclave_ID): validatable_enclave_state :=
   match state with
-  | enclave_state_value e memory_range => enclave_state_value e (NatMap.remove id memory_range)
+  | enclave_state_value e memory_range =>
+    match (NatMap.find id memory_range) with
+    | Some _ =>
+      match e with
+      | enclave_ID_inactive => enclave_state_valid (enclave_state_value e (NatMap.remove id memory_range))
+      | enclave_ID_active e_raw =>
+        match (eqb id e_raw) with
+        | true => enclave_state_error
+        | false => enclave_state_valid (enclave_state_value e (NatMap.remove id memory_range))
+        end
+      end
+    | None => enclave_state_error
+    end
   end.

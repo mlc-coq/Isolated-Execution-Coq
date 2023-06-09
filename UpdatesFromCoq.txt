@@ -1,0 +1,7 @@
+wf3:
+- F contains no duplicates
+- forall e, ran(V(e)) contains no duplicates
+- forall e e', e != e' -> ran(V(e)) intersect ran(V(e')) is empty
+
+wf5:
+- <F, V, C, R> needs to be existential, not forall
